@@ -1,0 +1,23 @@
+# config/seeds_default.yaml
+# Default random seeds for reproducible experiments.
+
+seeds:
+  # Short runs / smoke tests
+  small:
+    - 1
+    - 2
+    - 3
+
+  # Main experimental batch
+  main:
+    - 101
+    - 202
+    - 303
+    - 404
+    - 505
+
+  # Optional stress-test batch
+  stress:
+    - 9001
+    - 9002
+    - 9003

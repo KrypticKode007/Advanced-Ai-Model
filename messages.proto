@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package cybernetic.engine.v1;
+
+// Service defining continuous streaming synchronization lines
+service SentienceSynchronizer {
+  rpc StreamSensoryClock(stream SensoryMatrixFeed) returns (stream LoopStatus);
+}
+
+message ProbabilityDistribution {
+  repeated double state_probabilities = 1;
+}
+
+message SensoryMatrixFeed {
+  int64 epoch_timestamp = 1;
+  map<string, ProbabilityDistribution> channels = 2; // "VISION", "AUDIO", "TOUCH"
+}
+
+message HardwareTelemetry {
+  double cpu_temp_celsius = 1;
+  double gpu_temp_celsius = 2;
+  double memory_latency_ns = 3;
+  double total_system_watts = 4;
+}
+
+message LoopStatus {
+  int64 epoch_timestamp = 1;
+  string operational_state = 2; // "CALIBRATED", "PSYCHOSOMATIC_FREEZE", "DISSOCIATION"
+  HardwareTelemetry substrate_health = 3;
+  double aggregate_somatic_nats = 4;
+}

@@ -1,0 +1,430 @@
+"""
+AI Conscious Battery Optimizer — Kivy prototype
+--------------------------------------------------
+Native port of the web mockup: three radial gauges (Resistance / Heat / Cool)
+with glowing status color, static green/yellow/red zone rings, an overheat
+banner, a high-resistance shutdown/restart sequence, a "This device" vs
+"Bluetooth device" source toggle, an F/C unit toggle, AI auto-correct behind
+a hard safety lock, and a Structural Risk Index readout adapted from
+R = w_e*e + w_u*u + w_r*(1-r) + w_m*(1-m).
+
+Drop this in as main.py next to your existing buildozer.spec
+(requirements = python3,kivy already covers everything here — no extra
+dependencies needed). Bluetooth is a UI-level stub: swap scan_devices() /
+connect_to() for a real BLE library (e.g. plyer, or a custom
+python-for-android recipe) when you wire up actual hardware — the safety
+lock (auto-correct can nudge, never override manual shutoff) should stay
+enforced in that layer too, not just in the UI.
+"""
+
+import math
+import random
+
+from kivy.app import App
+from kivy.animation import Animation
+from kivy.clock import Clock
+from kivy.core.window import Window
+from kivy.metrics import dp
+from kivy.properties import NumericProperty, StringProperty, BooleanProperty
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.floatlayout import FloatLayout
+from kivy.uix.button import Button
+from kivy.uix.togglebutton import ToggleButton
+from kivy.uix.switch import Switch
+from kivy.uix.label import Label
+from kivy.uix.widget import Widget
+from kivy.uix.scrollview import ScrollView
+from kivy.graphics import Color, Ellipse, Line, RoundedRectangle
+
+# ---------------------------------------------------------------- palette --
+BG      = (10/255, 14/255, 26/255, 1)
+PANEL   = (18/255, 24/255, 40/255, 1)
+PANEL2  = (13/255, 19/255, 34/255, 1)
+STROKE  = (140/255, 160/255, 210/255, .28)
+TEXT    = (233/255, 237/255, 247/255, 1)
+DIM     = (139/255, 147/255, 170/255, 1)
+CYAN    = (76/255, 224/255, 210/255, 1)
+VIOLET  = (139/255, 127/255, 255/255, 1)
+AMBER   = (255/255, 214/255, 10/255, 1)
+RED     = (255/255, 84/255, 112/255, 1)
+GREEN   = (53/255, 224/255, 138/255, 1)
+
+STATUS_COLOR = {'green': GREEN, 'amber': AMBER, 'red': RED}
+
+# --------------------------------------------------------------- ranges ----
+HEAT_MIN, HEAT_MAX = 15, 70   # deg C, cell temperature
+COOL_MIN, COOL_MAX = 5, 55    # deg C, heatsink/coolant-loop temperature
+
+
+def clamp(v, lo=0, hi=1):
+    return max(lo, min(hi, v))
+
+
+def frac(v, lo, hi):
+    return clamp((v - lo) / (hi - lo), 0, 1)
+
+
+def heat_class(c):
+    return 'green' if c < 35 else ('amber' if c < 50 else 'red')
+
+
+def cool_class(c):
+    return 'green' if c < 25 else ('amber' if c < 40 else 'red')
+
+
+def resist_class(v):
+    return 'green' if v < 0.5 else ('amber' if v < 0.75 else 'red')
+
+
+def c_to_f(c):
+    return c * 9 / 5 + 32
+
+
+def fmt_temp(c, unit):
+    return f"{round(c_to_f(c))}°F" if unit == 'F' else f"{round(c)}°C"
+
+
+def risk_index(resistance, heat_c, cool_c):
+    return clamp(0.40 * frac(heat_c, HEAT_MIN, HEAT_MAX)
+                 + 0.35 * resistance
+                 + 0.25 * frac(cool_c, COOL_MIN, COOL_MAX))
+
+
+# ------------------------------------------------------------- widgets -----
+class Card(BoxLayout):
+    """A rounded, bordered panel — used for every card/panel in the app."""
+
+    def __init__(self, bg=PANEL, radius=16, **kw):
+        super().__init__(**kw)
+        self._bg = bg
+        self._radius = dp(radius)
+        with self.canvas.before:
+            self._c = Color(*bg)
+            self._rect = RoundedRectangle(radius=[self._radius], pos=self.pos, size=self.size)
+            Color(*STROKE)
+            self._line = Line(width=dp(1))
+        self.bind(pos=self._update, size=self._update)
+        self._update()
+
+    def _update(self, *a):
+        self._rect.pos = self.pos
+        self._rect.size = self.size
+        self._line.rounded_rectangle = (self.x, self.y, self.width, self.height, self._radius)
+
+
+class StatusLight(Widget):
+    status = StringProperty('green')
+
+    def __init__(self, **kw):
+        kw.setdefault('size_hint', (None, None))
+        kw.setdefault('size', (dp(10), dp(10)))
+        super().__init__(**kw)
+        self.bind(pos=self._redraw, size=self._redraw, status=self._redraw)
+
+    def _redraw(self, *a):
+        self.canvas.clear()
+        col = STATUS_COLOR[self.status]
+        with self.canvas:
+            Color(col[0], col[1], col[2], .35)
+            Ellipse(pos=(self.x - dp(3), self.y - dp(3)), size=(self.width + dp(6), self.height + dp(6)))
+            Color(*col)
+            Ellipse(pos=self.pos, size=self.size)
+
+
+class LiquidGauge(Widget):
+    """Radial gauge: static green/yellow/red zone ring + glowing level ring."""
+    level = NumericProperty(0)        # 0..1
+    status = StringProperty('green')
+    halo_alpha = NumericProperty(.16)
+
+    def __init__(self, low_break=.5, high_break=.75, **kw):
+        self.low_break = low_break
+        self.high_break = high_break
+        super().__init__(**kw)
+        self.bind(pos=self._redraw, size=self._redraw, level=self._redraw,
+                  status=self._redraw, halo_alpha=self._redraw)
+        Clock.schedule_once(self._redraw, 0)
+        pulse = (Animation(halo_alpha=.28, duration=1.3, t='in_out_sine')
+                 + Animation(halo_alpha=.12, duration=1.3, t='in_out_sine'))
+        pulse.repeat = True
+        pulse.start(self)
+
+    def set_level(self, value, animate=True):
+        if animate:
+            Animation.cancel_all(self, 'level')
+            Animation(level=value, duration=1.0, t='out_quad').start(self)
+        else:
+            self.level = value
+
+    def _redraw(self, *a):
+        self.canvas.before.clear()
+        self.canvas.clear()
+        self.canvas.after.clear()
+        if self.width < 4 or self.height < 4:
+            return
+        cx, cy = self.center_x, self.center_y
+        R = min(self.width, self.height) / 2 - dp(2)
+        outer_hole_r = R * 0.74
+        level_r = R * 0.60
+        level_hole_r = R * 0.40
+        col = STATUS_COLOR[self.status]
+
+        with self.canvas.before:
+            Color(col[0], col[1], col[2], self.halo_alpha)
+            Ellipse(pos=(cx - R - dp(10), cy - R - dp(10)), size=(2 * (R + dp(10)), 2 * (R + dp(10))))
+
+        a_top = 90
+        a_low = 90 - self.low_break * 360
+        a_high = 90 - self.high_break * 360
+        a_end = 90 - 360
+
+        with self.canvas:
+            Color(*PANEL2)
+            Ellipse(pos=(cx - R, cy - R), size=(2 * R, 2 * R))
+
+            Color(GREEN[0], GREEN[1], GREEN[2], .55)
+            Ellipse(pos=(cx - R, cy - R), size=(2 * R, 2 * R), angle_start=a_low, angle_end=a_top)
+            Color(AMBER[0], AMBER[1], AMBER[2], .55)
+            Ellipse(pos=(cx - R, cy - R), size=(2 * R, 2 * R), angle_start=a_high, angle_end=a_low)
+            Color(RED[0], RED[1], RED[2], .55)
+            Ellipse(pos=(cx - R, cy - R), size=(2 * R, 2 * R), angle_start=a_end, angle_end=a_high)
+
+            Color(*PANEL2)
+            Ellipse(pos=(cx - outer_hole_r, cy - outer_hole_r), size=(2 * outer_hole_r, 2 * outer_hole_r))
+
+            lvl_end = 90 - self.level * 360
+            Color(col[0], col[1], col[2], 1)
+            Ellipse(pos=(cx - level_r, cy - level_r), size=(2 * level_r, 2 * level_r),
+                    angle_start=lvl_end, angle_end=a_top)
+
+            Color(*PANEL2)
+            Ellipse(pos=(cx - level_hole_r, cy - level_hole_r), size=(2 * level_hole_r, 2 * level_hole_r))
+
+        with self.canvas.after:
+            Color(*STROKE)
+            Line(circle=(cx, cy, R), width=dp(1.2))
+            Color(1, 1, 1, .32)
+            for fr in (self.low_break, self.high_break):
+                ang = math.radians(90 - fr * 360)
+                x1, y1 = cx + outer_hole_r * math.cos(ang), cy + outer_hole_r * math.sin(ang)
+                x2, y2 = cx + R * math.cos(ang), cy + R * math.sin(ang)
+                Line(points=[x1, y1, x2, y2], width=dp(1.3))
+
+
+def seg_toggle(options, default, on_change):
+    """options: list of (key, label). Returns (row_widget, get_value_fn)."""
+    row = BoxLayout(size_hint_y=None, height=dp(34), spacing=dp(3))
+    buttons = {}
+
+    def make_cb(key):
+        def cb(instance):
+            if instance.state == 'down':
+                on_change(key)
+        return cb
+
+    for key, label in options:
+        b = ToggleButton(text=label, group=id(row), state='down' if key == default else 'normal',
+                          background_normal='', background_down='',
+                          background_color=(CYAN[0], CYAN[1], CYAN[2], 1) if key == default else PANEL2,
+                          color=(8/255, 16/255, 24/255, 1) if key == default else DIM,
+                          font_size=dp(12.5), bold=True)
+        b.bind(state=lambda inst, val, k=key: on_change(k) if val == 'down' else None)
+        buttons[key] = b
+        row.add_widget(b)
+
+    def restyle(active_key):
+        for k, b in buttons.items():
+            active = k == active_key
+            b.background_color = (CYAN[0], CYAN[1], CYAN[2], 1) if active else PANEL2
+            b.color = (8/255, 16/255, 24/255, 1) if active else DIM
+
+    return row, restyle
+
+
+def desc_row(title, desc, right_widget):
+    row = BoxLayout(size_hint_y=None, height=dp(58), spacing=dp(10), padding=(0, dp(6)))
+    txt = BoxLayout(orientation='vertical')
+    txt.add_widget(Label(text=title, color=TEXT, font_size=dp(14.5), bold=True,
+                          size_hint_y=None, height=dp(20), halign='left', valign='bottom',
+                          text_size=(dp(220), dp(20))))
+    txt.add_widget(Label(text=desc, color=DIM, font_size=dp(11.5),
+                          halign='left', valign='top', text_size=(dp(220), dp(34))))
+    row.add_widget(txt)
+    row.add_widget(right_widget)
+    return row
+
+
+# ------------------------------------------------------------------ root ---
+class Root(FloatLayout):
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        Window.clearcolor = BG
+
+        # ---- simulation state ----
+        self.resistance = 0.28
+        self.heat_c = 24.0
+        self.cool_c = 13.0
+        self.unit = 'F'
+        self.source = 'local'
+        self.ai_auto = True
+        self.bt_connected = False
+        self.restarting = False
+        self.banner_on = False
+
+        self._build_ui()
+        Clock.schedule_interval(self.tick, 1.7)
+        self.render()
+
+    # -------- helpers --------
+    def ai_active(self):
+        return self.ai_auto and (self.source == 'local' or self.bt_connected)
+
+    # -------- UI construction --------
+    def _build_ui(self):
+        scroller = ScrollView(size_hint=(1, 1))
+        content = BoxLayout(orientation='vertical', size_hint_y=None, padding=dp(16), spacing=dp(14))
+        content.bind(minimum_height=content.setter('height'))
+
+        # header
+        header = BoxLayout(size_hint_y=None, height=dp(52))
+        brand = BoxLayout(spacing=dp(10))
+        mark = Label(text='🔋', font_size=dp(20), size_hint=(None, None), size=(dp(34), dp(34)))
+        with mark.canvas.before:
+            Color(CYAN[0], CYAN[1], CYAN[2], 1)
+            RoundedRectangle(radius=[dp(9)], pos=mark.pos, size=mark.size)
+        titles = BoxLayout(orientation='vertical')
+        titles.add_widget(Label(text='AI Conscious Battery Optimizer', color=TEXT, font_size=dp(14),
+                                 bold=True, halign='left', valign='middle', text_size=(dp(190), None)))
+        titles.add_widget(Label(text='Prototype · v1.0', color=DIM, font_size=dp(10.5),
+                                 halign='left', valign='top', text_size=(dp(190), None)))
+        brand.add_widget(mark)
+        brand.add_widget(titles)
+        self.bt_pill = Label(text='This device', color=CYAN, font_size=dp(11.5),
+                              size_hint=(None, None), size=(dp(100), dp(28)))
+        header.add_widget(brand)
+        header.add_widget(self.bt_pill)
+        content.add_widget(header)
+
+        # structural risk panel
+        risk = Card(orientation='vertical', size_hint_y=None, height=dp(92), padding=dp(14), spacing=dp(6))
+        risk_top = BoxLayout(size_hint_y=None, height=dp(22))
+        risk_top.add_widget(Label(text='Structural Risk Index', color=DIM, font_size=dp(12), halign='left',
+                                   text_size=(dp(200), dp(22))))
+        self.risk_val_lbl = Label(text='0.00', color=TEXT, font_size=dp(18), bold=True,
+                                   size_hint=(None, None), size=(dp(70), dp(22)), halign='right',
+                                   text_size=(dp(70), dp(22)))
+        risk_top.add_widget(self.risk_val_lbl)
+        risk.add_widget(risk_top)
+        self.risk_track = Widget(size_hint_y=None, height=dp(6))
+        with self.risk_track.canvas:
+            Color(*PANEL2)
+            self._risk_track_rect = RoundedRectangle(radius=[dp(3)], pos=self.risk_track.pos,
+                                                       size=self.risk_track.size)
+        self.risk_track.bind(pos=self._layout_risk, size=self._layout_risk)
+        risk.add_widget(self.risk_track)
+        risk.add_widget(Label(text='R = 0.40·Heat + 0.35·Resistance + 0.25·Cool — adapted from the '
+                                    'structural-risk formulation R = w_e*e + w_u*u + w_r(1-r) + w_m(1-m)',
+                               color=DIM, font_size=dp(9.5), halign='left', valign='top',
+                               text_size=(dp(280), dp(28))))
+        content.add_widget(risk)
+
+        self.status_lbl = Label(text='Monitoring cell diagnostics…', color=DIM, font_size=dp(12.5),
+                                 size_hint_y=None, height=dp(18), halign='left', text_size=(dp(300), dp(18)))
+        content.add_widget(self.status_lbl)
+
+        # source toggle
+        src_row = BoxLayout(size_hint_y=None, height=dp(34))
+        src_row.add_widget(Label(text='Data source', color=DIM, font_size=dp(11.5), halign='left',
+                                  text_size=(dp(120), dp(34))))
+        seg, self._restyle_src = seg_toggle(
+            [('local', 'This device'), ('bt', 'Bluetooth device')], 'local', self.on_source_change)
+        src_row.add_widget(seg)
+        content.add_widget(src_row)
+
+        # unit toggle
+        unit_row = BoxLayout(size_hint_y=None, height=dp(34))
+        unit_row.add_widget(Label(text='Temperature units', color=DIM, font_size=dp(11.5), halign='left',
+                                   text_size=(dp(120), dp(34))))
+        useg, self._restyle_unit = seg_toggle([('F', '°F'), ('C', '°C')], 'F', self.on_unit_change)
+        unit_row.add_widget(useg)
+        content.add_widget(unit_row)
+
+        # gauges
+        gauges_row = BoxLayout(size_hint_y=None, height=dp(190), spacing=dp(12))
+        self.gauges = {}
+        self.gauge_val_lbl = {}
+        self.gauge_range_lbl = {}
+        self.gauge_light = {}
+        specs = [('resistance', 'Resistance', .5, .75, '0.0 – 1.0'),
+                 ('heat', 'Heat', .3636, .6364, None),
+                 ('cool', 'Cool', .40, .70, None)]
+        for key, name, lo, hi, static_range in specs:
+            card = Card(orientation='vertical', padding=dp(12), spacing=dp(8))
+            card.add_widget(Label(text=name, color=DIM, font_size=dp(12.5), size_hint_y=None, height=dp(16)))
+            gwrap = FloatLayout(size_hint=(1, None), height=dp(112))
+            gauge = LiquidGauge(low_break=lo, high_break=hi, size_hint=(None, None), size=(dp(112), dp(112)),
+                                 pos_hint={'center_x': .5, 'center_y': .5})
+            val_lbl = Label(text='--', color=TEXT, font_size=dp(17), bold=True,
+                             size_hint=(1, 1), halign='center', valign='middle')
+            val_lbl.bind(size=val_lbl.setter('text_size'))
+            gwrap.add_widget(gauge)
+            gwrap.add_widget(val_lbl)
+            card.add_widget(gwrap)
+            range_lbl = Label(text=static_range or '–', color=DIM, font_size=dp(10.5),
+                               size_hint_y=None, height=dp(14))
+            card.add_widget(range_lbl)
+            light = StatusLight(pos_hint={'center_x': .5})
+            light_wrap = FloatLayout(size_hint_y=None, height=dp(16))
+            light_wrap.add_widget(light)
+            card.add_widget(light_wrap)
+            gauges_row.add_widget(card)
+            self.gauges[key] = gauge
+            self.gauge_val_lbl[key] = val_lbl
+            self.gauge_range_lbl[key] = range_lbl
+            self.gauge_light[key] = light
+        content.add_widget(gauges_row)
+        self.update_range_labels()
+
+        # bluetooth panel
+        self.bt_panel = Card(orientation='vertical', size_hint_y=None, padding=dp(14), spacing=dp(4))
+        self.bt_panel.add_widget(Label(text='Bluetooth', color=TEXT, font_size=dp(14), bold=True,
+                                        size_hint_y=None, height=dp(20), halign='left',
+                                        text_size=(dp(260), dp(20))))
+        self.bt_label = Label(text='No device paired', color=TEXT, font_size=dp(13.5), bold=True)
+        self.bt_btn = Button(text='Scan', size_hint=(None, None), size=(dp(80), dp(34)),
+                              background_normal='', background_color=CYAN, color=(8/255, 16/255, 24/255, 1))
+        self.bt_btn.bind(on_release=self.on_bt_btn)
+        bt_row = desc_row('No device paired', 'Pairs with external battery hardware only — '
+                                                'phones never show up in the scan.', self.bt_btn)
+        self.bt_row_title = bt_row.children[-1].children[-1]  # not used further, kept simple
+        self.bt_panel.add_widget(bt_row)
+        self.device_list = BoxLayout(orientation='vertical', size_hint_y=None, spacing=dp(6), height=0, opacity=0)
+        for name, dtype in [('BMS-Node-07', 'Battery module'), ('PowerWall-Mini', 'Home battery'),
+                             ('eBike-Ctrl-12', 'Ride controller'), ('DroneCell-A3', 'Flight pack'),
+                             ('SolarHub-X', 'Charge controller')]:
+            item = Button(text=f'{name}   ·   {dtype}', size_hint_y=None, height=dp(38),
+                           background_normal='', background_color=PANEL2, color=TEXT, font_size=dp(12.5))
+            item.bind(on_release=lambda inst, n=name: self.connect_to(n))
+            self.device_list.add_widget(item)
+        self.bt_panel.add_widget(self.device_list)
+        self.bt_panel.height = dp(96)
+        content.add_widget(self.bt_panel)
+
+        # AI control panel
+        ai_panel = Card(orientation='vertical', size_hint_y=None, padding=dp(14), spacing=dp(2))
+        ai_panel.add_widget(Label(text='AI control', color=TEXT, font_size=dp(14), bold=True,
+                                   size_hint_y=None, height=dp(20), halign='left', text_size=(dp(260), dp(20))))
+        self.ai_switch = Switch(active=True, size_hint=(None, None), size=(dp(50), dp(30)))
+        self.ai_switch.bind(active=self.on_ai_toggle)
+        ai_panel.add_widget(desc_row('Auto-correct', 'Lets the AI rebalance load and cool the pack '
+                                                       'automatically when a gauge crosses a safe limit.',
+                                      self.ai_switch))
+        ai_panel.add_widget(desc_row('Predictive forecast', 'Projects resistance drift forward to flag '
+                                                              'degradation before it becomes damage.',
+                                      Switch(active=True, size_hint=(None, None), size=(dp(50), dp(30)))))
+        ai_panel.add_widget(desc_row('Anomaly log', 'Keeps a timestamped record of every correction, '
+                                                      'for pattern review later.',
+                                      Switch(active=True, size_hint=(None, None), size=(dp(50), dp(30)))))
+        ai_panel.add_widget(desc_row('Adaptive charge profile', "Shapes charge current to the pack's "
+                                                                  'current heat and resistance instead of '
+                                                               

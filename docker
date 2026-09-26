@@ -1,0 +1,27 @@
+# Dockerfile: Deployment Container for the Sentience Engine
+FROM python:3.11-slim-bookworm
+
+# Establish strict non-root POSIX isolation
+RUN groupadd -g 2002 cybernetic && useradd -u 2002 -g cybernetic -m engine_user
+
+# Install physical tracing metrics tools and C-compiled math extensions
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgomp1 \
+    lm-sensors \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/sentience_engine
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ ./src/
+
+RUN chown -R engine_user:cybernetic /opt/sentience_engine
+USER engine_user
+
+ENV PYTHONUNBUFFERED=1
+ENV CC_OPTIMIZATION=NATIVE
+
+ENTRYPOINT ["python", "src/main_loop.py"]

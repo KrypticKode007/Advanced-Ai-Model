@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  sentience_core:
+    build: .
+    container_name: cybernetic_core_node
+    ipc: host  # Allows zero-copy shared memory access for high-speed calculation loops
+    volumes:
+      - /sys/class/thermal:/sys/class/thermal:ro  # Mounts physical CPU core temperatures
+      - /sys/class/power_supply:/sys/class/power_supply:ro # Mounts raw current draw counters
+    devices:
+      - /dev/nvidia0:/dev/nvidia0  # Pass the GPU substrate layer for Node 2 telemetry bindings
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 16G
+    restart: unless-stopped

@@ -1,0 +1,52 @@
+# config/disturbances_scenario_1.yaml
+# Failure injection schedule for a simple gridworld-style experiment.
+
+scenario_id: "scenario_1"
+description: "Mixed sensor and resource disturbances over 50 time steps."
+
+time_horizon: 50
+
+# Default "no disturbance" values
+default:
+  kind: "none"
+  magnitude: 0.0
+
+# Specific injections at given time steps.
+# Your code can read this as: for each t, look for a matching entry;
+# if none, use 'default'.
+disturbances:
+  - time: 5
+    kind: "sensor_noise"
+    magnitude: 0.2
+
+  - time: 10
+    kind: "sensor_noise"
+    magnitude: 0.5
+
+  - time: 15
+    kind: "world_shift"
+    magnitude: 1.0
+
+  - time: 20
+    kind: "sensor_blackout"
+    magnitude: 0.0
+
+  - time: 25
+    kind: "actuator_weakening"
+    magnitude: 0.4
+
+  - time: 30
+    kind: "latency_spike"
+    magnitude: 0.7
+
+  - time: 35
+    kind: "battery_drain"
+    magnitude: 0.5
+
+  - time: 40
+    kind: "thermal_limit"
+    magnitude: 0.6
+
+  - time: 45
+    kind: "sensor_noise"
+    magnitude: 0.3

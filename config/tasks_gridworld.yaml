@@ -1,0 +1,36 @@
+# config/tasks_gridworld.yaml
+# Simple gridworld tasks for embodied cybernetic agent experiments.
+
+world:
+  width: 10
+  height: 10
+
+  obstacles:
+    - { x: 3, y: 3 }
+    - { x: 3, y: 4 }
+    - { x: 3, y: 5 }
+    - { x: 6, y: 6 }
+    - { x: 7, y: 6 }
+
+  # Optional "unsafe" zones where collisions are more costly
+  hazard_zones:
+    - { x: 5, y: 5, radius: 1 }
+
+tasks:
+  - id: "task_1"
+    description: "Start in bottom-left, reach top-right."
+    start: { x: 0, y: 0 }
+    goal:  { x: 9, y: 9 }
+    max_steps: 100
+
+  - id: "task_2"
+    description: "Navigate around central obstacles to reach goal."
+    start: { x: 0, y: 9 }
+    goal:  { x: 9, y: 0 }
+    max_steps: 120
+
+  - id: "task_3"
+    description: "Short path through hazard zone (tests risk-sensitive routing)."
+    start: { x: 1, y: 1 }
+    goal:  { x: 8, y: 8 }
+    max_steps: 80

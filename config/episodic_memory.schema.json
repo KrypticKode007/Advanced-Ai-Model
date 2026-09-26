@@ -1,0 +1,154 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Episodic Memory Entry",
+  "$comment": "Version 1.0.0; architecture: Homeostatic-Continuous-Continuity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "timestamp",
+    "session_id",
+    "context",
+    "internal_telemetry_snapshot",
+    "affective_signature",
+    "episodic_payload",
+    "association_tags"
+  ],
+  "properties": {
+    "timestamp": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807,
+      "description": "Epoch timestamp in milliseconds"
+    },
+    "session_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "active_goal_id",
+        "environmental_signature"
+      ],
+      "properties": {
+        "active_goal_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "environmental_signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hash or localized vector overview"
+        }
+      }
+    },
+    "internal_telemetry_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "battery_level",
+        "temperature_level",
+        "prediction_delta"
+      ],
+      "properties": {
+        "battery_level": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Normalized battery level from 0.0 to 1.0"
+        },
+        "temperature_level": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Normalized thermal load from 0.0 to 1.0"
+        },
+        "prediction_delta": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "affective_signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "valence",
+        "arousal",
+        "urgency",
+        "dominant_state"
+      ],
+      "properties": {
+        "valence": {
+          "type": "number",
+          "minimum": -1,
+          "maximum": 1
+        },
+        "arousal": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "urgency": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "dominant_state": {
+          "type": "string",
+          "enum": [
+            "calm_confident",
+            "stressed_urgent",
+            "anxious_alarm",
+            "exhausted_degraded"
+          ]
+        }
+      }
+    },
+    "episodic_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action_taken",
+        "sensory_input_summary",
+        "result_outcome",
+        "homeostatic_impact_delta"
+      ],
+      "properties": {
+        "action_taken": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sensory_input_summary": {
+          "type": "string"
+        },
+        "result_outcome": {
+          "type": "string"
+        },
+        "homeostatic_impact_delta": {
+          "type": "number",
+          "minimum": -2,
+          "maximum": 2,
+          "description": "Change in valence after the action"
+        }
+      }
+    },
+    "association_tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "examples": [
+        [
+          "high-prediction-error",
+          "thermal-throttling",
+          "recovery-sequence"
+        ]
+      ]
+    }
+  }
+}
