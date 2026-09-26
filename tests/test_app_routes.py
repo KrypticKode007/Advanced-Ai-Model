@@ -41,6 +41,19 @@ def test_experiment_route(tmp_path, monkeypatch):
     assert result["metrics"]["success"] == 1.0
 
 
+def test_agent_simulation_route_runs_app_py_simulation():
+    response = client.post("/agent/simulate", params={"steps": 5, "seed": 42})
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["seed"] == 42
+    assert data["steps"] == 5
+    assert len(data["trace"]) == 5
+    assert data["trace"][4]["disturbance"] == "sensor_blackout"
+    assert "mean_risk" in data["summary"]
+    assert "attention_source" in data["trace"][0]
+
+
 def test_dashboard_route():
     response = client.get("/dashboard")
     assert response.status_code == 200

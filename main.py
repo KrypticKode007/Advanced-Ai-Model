@@ -1,11 +1,12 @@
 from pathlib import Path
 
 import yaml
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse
 import numpy as np
 from scipy.special import rel_entr
 
+from app import run_simulation
 from src.metrics import aggregate_by_condition, compute_basic_metrics, load_log
 from src.run_experiments import run_single_experiment
 
@@ -100,6 +101,7 @@ async def read_root():
         "status": "ok",
         "docs": "/docs",
         "simulate": "/simulate",
+        "agent_simulation": "/agent/simulate",
     }
 
 
@@ -150,6 +152,54 @@ async def simulate():
     }
 
 
+@app.post("/agent/simulate")
+def simulate_agent(
+    steps: int = Query(default=30, ge=1, le=500),
+    seed: int = 42,
+):
+    logs = run_simulation(steps=steps, seed=seed, print_output=False)
+    risks = [entry.smoothed_risk for entry in logs]
+    final = logs[-1]
+
+    return {
+        "seed": seed,
+        "steps": len(logs),
+        "summary": {
+            "mean_risk": sum(risks) / len(risks),
+            "max_risk": max(risks),
+            "final_mode": final.mode,
+            "final_battery": final.battery,
+            "final_temperature": final.temperature,
+        },
+        "trace": [
+            {
+                "step": entry.t,
+                "disturbance": entry.disturbance.kind,
+                "observation": entry.observation,
+                "prediction": entry.prediction,
+                "prediction_error": entry.error,
+                "uncertainty": entry.uncertainty,
+                "raw_risk": entry.raw_risk,
+                "risk": entry.smoothed_risk,
+                "mode": entry.mode,
+                "reason": entry.reason,
+                "effort": entry.effort,
+                "battery": entry.battery,
+                "temperature": entry.temperature,
+                "consistency": entry.consistency,
+                "attention_source": (
+            entry.workspace_broadcast.source_module
+            if entry.workspace_broadcast is not None
+            else None
+                ),
+                "memory_match_count": len(entry.memory_matches),
+                "association_tags": entry.episodic_entry["association_tags"],
+            }
+            for entry in logs
+        ],
+    }
+
+
 @app.post("/experiments/run")
 async def run_experiment(
     request: Request,
@@ -180,7 +230,7 @@ async def run_experiment(
 
     task = next((item for item in tasks_cfg["tasks"] if item["id"] == task_id), None)
     if task is None:
-      raise ValueError(f"Unknown task_id: {task_id}")
+        raise ValueError(f"Unknown task_id: {task_id}")
 
     run_metrics = run_single_experiment(condition_id, seed, task_id=task_id)
     file_path = LOG_DIR / f"condition_{condition_id}_seed_{seed:03d}_{task_id}.csv"
@@ -191,8 +241,8 @@ async def run_experiment(
         "task": task,
         "condition": conditions[condition_key],
         "result": {
-          "status": "completed",
-          "message": f"Condition {condition_id} completed {task_id} with seed {seed}.",
+            "status": "completed",
+            "message": f"Condition {condition_id} completed {task_id} with seed {seed}.",
             "metrics": run_metrics,
             "csv_path": str(file_path),
         },

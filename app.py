@@ -325,7 +325,8 @@ class Disturbance:
 
 
 class Environment:
-    def __init__(self):
+    def __init__(self, rng=None):
+        self.rng = rng or random
         self.true_state = 0.0
         self.noise_level = 0.0
         self.blackout_active = False
@@ -348,7 +349,7 @@ class Environment:
         if self.blackout_active:
             return None
 
-        noise = random.uniform(-self.noise_level, self.noise_level)
+        noise = self.rng.uniform(-self.noise_level, self.noise_level)
         return self.true_state + noise
 
     def apply_action(self, effort):
@@ -518,10 +519,8 @@ class Agent:
 # ---------- Simulation ----------
 
 
-def run_simulation(steps=30, seed=42):
-    random.seed(seed)
-
-    env = Environment()
+def run_simulation(steps=30, seed=42, print_output=True):
+    env = Environment(rng=random.Random(seed))
     agent = Agent(name="cybernetic_agent")
     session_id = str(uuid.uuid4())
 
@@ -716,7 +715,8 @@ def run_simulation(steps=30, seed=42):
             )
         )
 
-    print_results(logs)
+    if print_output:
+        print_results(logs)
     return logs
 
 
