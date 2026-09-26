@@ -50,7 +50,8 @@ class GridWorld:
             self.sensor_blackout = True
         elif kind == "world_shift":
             # Shift goal for simplicity
-            self.goal = (self.goal[0], self.goal[1] + int(mag))
+            shifted_y = self.goal[1] + int(mag)
+            self.goal = (self.goal[0], max(0, min(self.height - 1, shifted_y)))
         elif kind == "actuator_weakening":
             self.actuator_scale = max(0.1, 1.0 - mag)
         # You can add more kinds later.

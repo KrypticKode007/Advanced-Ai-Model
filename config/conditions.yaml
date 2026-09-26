@@ -8,6 +8,7 @@ conditions:
     world_model_enabled: false
     telemetry_enabled: false
     self_model_enabled: false
+    substrate_enabled: false
     regulation_mode: "risk_agnostic"   # ignores structural risk, no mode switching
 
   B_predictive_agent:
@@ -16,6 +17,7 @@ conditions:
     world_model_enabled: true
     telemetry_enabled: false
     self_model_enabled: false
+    substrate_enabled: false
     regulation_mode: "risk_light"      # can react to prediction error only
 
   C_embodied_predictive_agent:
@@ -24,12 +26,14 @@ conditions:
     world_model_enabled: true
     telemetry_enabled: true
     self_model_enabled: false          # or 'limited' if you want an intermediate type
+    substrate_enabled: false
     regulation_mode: "resource_aware"  # responds to resource integrity + error
 
   D_full_cybernetic_agent:
     id: "D"
-    description: "Full cybernetic agent: world model + telemetry + metacognitive self-model."
+    description: "Full cybernetic agent: world model + telemetry + self-model + substrate monitoring."
     world_model_enabled: true
     telemetry_enabled: true
     self_model_enabled: true
+    substrate_enabled: true
     regulation_mode: "risk_sensitive"  # full structural risk index and mode switching

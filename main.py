@@ -1,4 +1,3 @@
-import csv
 from pathlib import Path
 
 import yaml
@@ -8,6 +7,7 @@ import numpy as np
 from scipy.special import rel_entr
 
 from src.metrics import aggregate_by_condition, compute_basic_metrics, load_log
+from src.run_experiments import run_single_experiment
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 LOG_DIR = PROJECT_ROOT / "logs" / "raw"
@@ -111,32 +111,6 @@ def _load_conditions_and_tasks():
     return conditions, tasks_cfg
 
 
-def _write_run_csv(condition_id: str, seed: int, task_id: str, run_metrics: dict):
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
-
-    file_name = f"condition_{condition_id}_seed_{seed:03d}_{task_id}.csv"
-    path = LOG_DIR / file_name
-
-    fieldnames = ["step", "risk", "success", "condition", "seed", "task_id"]
-    rows = [
-        {"step": 0, "risk": 0.12, "success": 0, "condition": condition_id, "seed": seed, "task_id": task_id},
-        {"step": 1, "risk": 0.24, "success": 0, "condition": condition_id, "seed": seed, "task_id": task_id},
-        {"step": 2, "risk": 0.38, "success": 1, "condition": condition_id, "seed": seed, "task_id": task_id},
-    ]
-    rows[0]["risk"] = run_metrics.get("mean_risk", 0.12)
-    rows[1]["risk"] = min(1.0, run_metrics.get("max_risk", 0.24))
-    rows[2]["risk"] = max(0.0, run_metrics.get("mean_risk", 0.12) * 0.8)
-    rows[2]["success"] = 1 if run_metrics.get("success", 0.0) > 0.5 else 0
-
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-
-    return path
-
-
 @app.get("/health")
 async def health_check():
     return {"status": "ok"}
@@ -204,16 +178,12 @@ async def run_experiment(
     if condition_key is None:
         raise ValueError(f"Unknown condition_id: {condition_id}")
 
-    task = next((item for item in tasks_cfg["tasks"] if item["id"] == task_id), tasks_cfg["tasks"][0])
-    success_value = 1.0 if seed % 2 == 0 else 0.0
-    run_metrics = {
-        "success": success_value,
-        "mean_risk": 0.18 + (0.08 * len(condition_id)),
-        "max_risk": 0.48 + (0.06 * len(task_id)),
-        "steps": 3,
-    }
+    task = next((item for item in tasks_cfg["tasks"] if item["id"] == task_id), None)
+    if task is None:
+      raise ValueError(f"Unknown task_id: {task_id}")
 
-    file_path = _write_run_csv(condition_id, seed, task_id, run_metrics)
+    run_metrics = run_single_experiment(condition_id, seed, task_id=task_id)
+    file_path = LOG_DIR / f"condition_{condition_id}_seed_{seed:03d}_{task_id}.csv"
     result = {
         "condition_id": condition_id,
         "seed": seed,
@@ -221,8 +191,8 @@ async def run_experiment(
         "task": task,
         "condition": conditions[condition_key],
         "result": {
-            "status": "simulated",
-            "message": f"Condition {condition_id} ran with seed {seed} on {task_id}.",
+          "status": "completed",
+          "message": f"Condition {condition_id} completed {task_id} with seed {seed}.",
             "metrics": run_metrics,
             "csv_path": str(file_path),
         },

@@ -5,6 +5,9 @@ import random
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+import numpy as np
+from scipy.special import rel_entr
+
 
 class WorldModel:
     """Predicts external state and updates beliefs."""
@@ -36,6 +39,59 @@ class TelemetryModel:
     def resource_integrity(self):
         # 1.0 = perfect, 0.0 = fully degraded
         return 0.5 * self.battery + 0.5 * (1.0 - self.temperature)
+
+
+class SubstrateBoundEngine:
+    """Connect informational stress to simulated hardware telemetry."""
+
+    def __init__(self):
+        self.internal_map = np.array([0.6, 0.3, 0.1])
+        self.somatic_state = "STABLE"
+        self.collapse_threshold = 1.2
+        self.last_stress = 0.0
+        self.core_temperature_celsius = 42.0
+        self.voltage_millivolts = 1200
+
+    def read_hardware_telemetry(self):
+        """Return simulated substrate temperature and voltage."""
+        return self.core_temperature_celsius, self.voltage_millivolts
+
+    def modulate_substrate_strain(self, somatic_stress):
+        """Translate informational stress into simulated hardware strain."""
+        stress_factor = float(np.sum(somatic_stress))
+        self.core_temperature_celsius += stress_factor * 15.0
+        self.voltage_millivolts += int(stress_factor * 100)
+
+    def simulate_hardware_epoch(self, epoch_id, external_reality_P):
+        external_reality = np.asarray(external_reality_P, dtype=float)
+        if (
+            external_reality.shape != self.internal_map.shape
+            or not np.all(np.isfinite(external_reality))
+            or np.any(external_reality < 0.0)
+            or not np.isclose(np.sum(external_reality), 1.0)
+        ):
+            raise ValueError("external_reality_P must be a valid probability distribution")
+
+        somatic_stress = float(np.sum(rel_entr(external_reality, self.internal_map)))
+        self.last_stress = somatic_stress
+        self.modulate_substrate_strain(somatic_stress)
+        temp, _ = self.read_hardware_telemetry()
+
+        if somatic_stress > self.collapse_threshold or temp > 85.0:
+            self.somatic_state = "PSYCHOSOMATIC_FREEZE"
+            return (
+                f"Epoch {epoch_id} | [HARDWARE ARREST] Core Temp: "
+                f"{temp}°C | Freeze Triggered."
+            )
+
+        learning_rate = 0.1
+        self.internal_map += learning_rate * (external_reality - self.internal_map)
+        self.internal_map /= np.sum(self.internal_map)
+
+        return (
+            f"Epoch {epoch_id} | [STABLE] Stress: {somatic_stress:.4f} nats | "
+            f"Temp: {temp:.1f}°C"
+        )
 
 
 @dataclass
@@ -191,6 +247,11 @@ class Agent:
         self.world = WorldModel() if condition_cfg["world_model_enabled"] else None
         self.telemetry = TelemetryModel() if condition_cfg["telemetry_enabled"] else None
         self.self_model = SelfModel() if condition_cfg["self_model_enabled"] else None
+        self.substrate_engine = (
+            SubstrateBoundEngine()
+            if condition_cfg.get("substrate_enabled", False)
+            else None
+        )
         self.regulator = Regulator(mode_policy=condition_cfg["regulation_mode"])
         self.boundary_monitor = SelfModelBoundaryMonitor()
         self.action_selection = ActionSelectionEngine(self.boundary_monitor)
@@ -233,15 +294,39 @@ class Agent:
             structural_degradation, _ = self.boundary_monitor.evaluate_structural_degradation(
                 structural_integrity
             )
+        substrate_degradation = 0.0
+        if self.substrate_engine is not None:
+            substrate_degradation = min(
+                1.0,
+                self.substrate_engine.last_stress
+                / self.substrate_engine.collapse_threshold,
+            )
 
         R_t = (
             self.w_e * error +
             self.w_u * uncertainty +
             self.w_r * (1.0 - r_t) +
             self.w_m * (1.0 - m_t) +
-            0.2 * structural_degradation
+            0.2 * structural_degradation +
+            0.2 * substrate_degradation
         )
         return min(1.0, R_t)
+
+    def update_substrate(self, epoch_id, external_reality):
+        if self.substrate_engine is None:
+            return None
+        return self.substrate_engine.simulate_hardware_epoch(epoch_id, external_reality)
+
+    def choose_mode(self, risk, resource_integrity=None, error=None):
+        mode = self.regulator.choose_mode(
+            risk, resource_integrity=resource_integrity, error=error
+        )
+        if (
+            self.substrate_engine is not None
+            and self.substrate_engine.somatic_state != "STABLE"
+        ):
+            return "shutdown"
+        return mode
 
     def resolve_mitigation_strategy(self, memory_match, similarity_score):
         return self.action_selection.resolve_mitigation_strategy(
@@ -250,8 +335,10 @@ class Agent:
 
     def act(self, mode):
         # Map mode to effort; “shutdown” = zero effort.
-        if self.telemetry is None:
+        if mode == "shutdown":
             return 0.0
+        if self.telemetry is None:
+            return 1.0
 
         if mode == "normal":
             effort = 1.0
