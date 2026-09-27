@@ -55,6 +55,13 @@ boundary risk from chemistry/specification assumptions. Its output is labeled
 `screening_estimate`; it is not measured cell telemetry and must not be used as
 a physical fast-charge authorization.
 
+Android integration is available through `src/android_transport.py`. It reads
+`/sys/class/power_supply/battery` telemetry when present and runs a preservation
+policy that reduces current at high temperature or SoC and suspends charging at
+critical temperature. The transport is read-only by default; physical sysfs
+writes require an available target path and explicit `write_enabled=True`, and
+must be validated against the device vendor's power-supply nodes first.
+
 Recorded BMS data can be replayed through
 `POST /battery/evaluate` with a JSON array of observations containing `time`,
 four `cells`, `temperature`, `current`, and four `bypass` flags. The endpoint
