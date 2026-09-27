@@ -1,12 +1,20 @@
 from pathlib import Path
+from typing import Any
 
 import yaml
-from fastapi import FastAPI, Query, Request
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 import numpy as np
 from scipy.special import rel_entr
 
 from app import run_simulation
+from src.advanced_chemistry import (
+    DEFAULT_CHEMISTRY,
+    DEFAULT_SPECS,
+    AutonomousBatteryDynamicsEngine,
+)
+from src.battery import AutonomousBatteryController, SelfHealingBattery
+from src.battery_metrics import summarize_decisions
 from src.metrics import aggregate_by_condition, compute_basic_metrics, load_log
 from src.run_experiments import run_single_experiment
 
@@ -102,6 +110,10 @@ async def read_root():
         "docs": "/docs",
         "simulate": "/simulate",
         "agent_simulation": "/agent/simulate",
+                "battery_simulation": "/battery/simulate",
+        "autonomous_battery": "/battery/autonomous",
+                "battery_evaluation": "/battery/evaluate",
+                "chemistry_evaluation": "/battery/chemistry/evaluate",
     }
 
 
@@ -188,15 +200,115 @@ def simulate_agent(
                 "temperature": entry.temperature,
                 "consistency": entry.consistency,
                 "attention_source": (
-            entry.workspace_broadcast.source_module
-            if entry.workspace_broadcast is not None
-            else None
+                    entry.workspace_broadcast.source_module
+                    if entry.workspace_broadcast is not None
+                    else None
                 ),
                 "memory_match_count": len(entry.memory_matches),
                 "association_tags": entry.episodic_entry["association_tags"],
             }
             for entry in logs
         ],
+    }
+
+
+@app.post("/battery/simulate")
+def simulate_battery(
+    steps: int = Query(default=30, ge=1, le=500),
+    seed: int = 42,
+    speed_multiplier: int = Query(default=1, ge=1, le=10),
+):
+    """Run the self-healing redundant-cell battery simulation."""
+    trace = SelfHealingBattery(seed=seed).run(steps, speed_multiplier=speed_multiplier)
+    final = trace[-1]
+    return {
+        "seed": seed,
+        "steps": len(trace),
+        "speed_multiplier": speed_multiplier,
+        "summary": {
+            "final_temperature": final["temperature"],
+            "bypassed_cells": [
+                index for index, bypassed in enumerate(final["bypass"])
+                if bypassed
+            ],
+            "final_cells": final["cells"],
+        },
+        "trace": trace,
+    }
+
+
+
+@app.post("/battery/autonomous")
+def simulate_autonomous_battery(
+    steps: int = Query(default=30, ge=1, le=500),
+    seed: int = 42,
+    speed_multiplier: int = Query(default=1, ge=1, le=10),
+):
+    """Run the self-modeling battery controller in a closed loop."""
+    trace = AutonomousBatteryController(seed=seed).run(
+        steps, speed_multiplier=speed_multiplier
+    )
+    final = trace[-1]
+    return {
+        "seed": seed,
+        "steps": len(trace),
+        "speed_multiplier": speed_multiplier,
+        "summary": {
+            "final_health": final["self_model"]["health"],
+            "final_risk": final["self_model"]["risk"],
+            "final_action": final["action"],
+            "safety_override": final["safety_override"],
+            "final_prediction_error": final["prediction"]["error"],
+            "estimated_drop_rate": final["prediction"]["estimated_drop_rate"],
+        },
+        "metrics": summarize_decisions(trace),
+        "trace": trace,
+    }
+
+
+@app.post("/battery/evaluate")
+def evaluate_battery_telemetry(
+    observations: list[dict[str, Any]] = Body(..., min_length=1, max_length=500),
+):
+    """Replay recorded BMS observations through the autonomous controller."""
+    controller = AutonomousBatteryController()
+    try:
+        trace = [
+            controller.observe(observation).as_dict()
+            for observation in observations
+        ]
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    errors = [item["prediction"]["error"] for item in trace]
+    final = trace[-1]
+    return {
+        "observations": len(trace),
+        "metrics": summarize_decisions(trace),
+        "summary": {
+            "mean_prediction_error": sum(errors) / len(errors),
+            "max_prediction_error": max(errors),
+            "final_action": final["action"],
+            "safety_override": final["safety_override"],
+        },
+        "trace": trace,
+    }
+
+
+@app.post("/battery/chemistry/evaluate")
+def evaluate_advanced_chemistry(
+    cycle_count: int = Query(default=350, ge=0, le=100_000),
+    average_temp: float = Query(default=42.0, ge=-50.0, le=150.0),
+    state_of_charge: float = Query(default=0.95, ge=0.0, le=1.0),
+    charge_rate_c: float = Query(default=3.0, ge=0.0, le=20.0),
+):
+    """Run the advanced chemistry screening estimate, not a charger command."""
+    engine = AutonomousBatteryDynamicsEngine(DEFAULT_CHEMISTRY, DEFAULT_SPECS)
+    return {
+        "chemistry": DEFAULT_CHEMISTRY.__dict__,
+        "specs": DEFAULT_SPECS.__dict__,
+        "evaluation": engine.evaluate(
+            cycle_count, average_temp, state_of_charge, charge_rate_c
+        ),
     }
 
 
