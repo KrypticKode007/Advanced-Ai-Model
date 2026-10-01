@@ -1,18 +1,49 @@
-version: '3.8'
-
 services:
-  sentience_core:
+  api:
     build: .
-    container_name: cybernetic_core_node
-    ipc: host  # Allows zero-copy shared memory access for high-speed calculation loops
+    working_dir: /app
+    expose:
+      - "8000"
+    environment:
+      APP_ENV: production
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:?Set API_AUTH_TOKEN in .env}
     volumes:
-      - /sys/class/thermal:/sys/class/thermal:ro  # Mounts physical CPU core temperatures
-      - /sys/class/power_supply:/sys/class/power_supply:ro # Mounts raw current draw counters
-    devices:
-      - /dev/nvidia0:/dev/nvidia0  # Pass the GPU substrate layer for Node 2 telemetry bindings
-    deploy:
-      resources:
-        limits:
-          cpus: '4.0'
-          memory: 16G
+      - experiment_logs:/app/logs
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    cpus: 2.0
+    mem_limit: 2g
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      start_period: 15s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  experiment_logs:
+  caddy_data:
+  caddy_config:

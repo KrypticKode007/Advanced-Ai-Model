@@ -1,13 +1,12 @@
 # requirements.txt
 
-# Core Python version (adjust if needed)
-# python>=3.10
+# Supported Python version: 3.10 or later.
 
 # YAML config loading
 PyYAML>=6.0
 jsonschema>=4.20
 
-# Plotting / analysis (for later results + figures)
+# Plotting and analysis used by the reporting scripts
 matplotlib>=3.8
 pandas>=2.0
 
@@ -15,13 +14,14 @@ pandas>=2.0
 numpy>=1.26
 scipy>=1.11.4
 
-# App runtime
+# API runtime and test client dependencies
 fastapi>=0.115.0
 starlette>=0.37.2
 uvicorn>=0.30.0
 httpx>=0.28.1
 httpx2>=2.13.0
 anyio>=4.7.0
+python-multipart>=0.0.20
 
 # Validation
 pytest>=8.0.0

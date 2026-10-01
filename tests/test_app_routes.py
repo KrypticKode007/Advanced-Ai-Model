@@ -14,6 +14,21 @@ def test_health_route():
     assert response.json() == {"status": "ok"}
 
 
+def test_api_authentication_and_production_fail_closed(monkeypatch):
+    monkeypatch.setenv("API_AUTH_TOKEN", "test-token")
+    assert client.get("/config").status_code == 401
+    assert client.get(
+        "/config", headers={"Authorization": "Bearer test-token"}
+    ).status_code == 200
+    assert client.get("/health").status_code == 200
+
+    monkeypatch.delenv("API_AUTH_TOKEN")
+    monkeypatch.setenv("APP_ENV", "production")
+    response = client.get("/config")
+    assert response.status_code == 503
+    assert response.json()["detail"] == "API authentication is not configured"
+
+
 def test_config_route():
     response = client.get("/config")
     assert response.status_code == 200
@@ -39,6 +54,25 @@ def test_experiment_route(tmp_path, monkeypatch):
         rows = list(csv.DictReader(log_file))
     assert len(rows) == result["metrics"]["steps"]
     assert result["metrics"]["success"] == 1.0
+
+
+def test_experiment_route_returns_validation_errors_for_invalid_input():
+    missing_condition = client.post("/experiments/run")
+    unknown_condition = client.post(
+        "/experiments/run", params={"condition_id": "UNKNOWN"}
+    )
+    unknown_task = client.post(
+        "/experiments/run", params={"condition_id": "A", "task_id": "unknown"}
+    )
+    invalid_form_seed = client.post(
+        "/experiments/run",
+        data={"condition_id": "A", "seed": "not-an-int", "task_id": "task_1"},
+    )
+
+    assert missing_condition.status_code == 422
+    assert unknown_condition.status_code == 422
+    assert unknown_task.status_code == 422
+    assert invalid_form_seed.status_code == 422
 
 
 def test_agent_simulation_route_runs_app_py_simulation():

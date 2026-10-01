@@ -1,9 +1,11 @@
 from pathlib import Path
 from typing import Any
+import hmac
+import os
 
 import yaml
 from fastapi import Body, FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 import numpy as np
 from scipy.special import rel_entr
 
@@ -102,6 +104,30 @@ engine = AuditedCyberneticEngine()
 app = FastAPI(title="Embodied Cybernetic Agency", version="0.1.0")
 
 
+@app.middleware("http")
+async def authenticate_api(request: Request, call_next):
+    if request.url.path == "/health":
+        return await call_next(request)
+
+    expected_token = os.environ.get("API_AUTH_TOKEN", "").strip()
+    if not expected_token:
+        if os.environ.get("APP_ENV", "").lower() == "production":
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "API authentication is not configured"},
+            )
+        return await call_next(request)
+
+    supplied_token = request.headers.get("authorization", "")
+    if not hmac.compare_digest(supplied_token, f"Bearer {expected_token}"):
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Authentication required"},
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await call_next(request)
+
+
 @app.get("/")
 async def read_root():
     return {
@@ -110,10 +136,10 @@ async def read_root():
         "docs": "/docs",
         "simulate": "/simulate",
         "agent_simulation": "/agent/simulate",
-                "battery_simulation": "/battery/simulate",
+        "battery_simulation": "/battery/simulate",
         "autonomous_battery": "/battery/autonomous",
-                "battery_evaluation": "/battery/evaluate",
-                "chemistry_evaluation": "/battery/chemistry/evaluate",
+        "battery_evaluation": "/battery/evaluate",
+        "chemistry_evaluation": "/battery/chemistry/evaluate",
     }
 
 
@@ -321,16 +347,25 @@ async def run_experiment(
 ):
     if request.method == "POST":
         content_type = request.headers.get("content-type", "")
-        if "application/x-www-form-urlencoded" in content_type or "multipart/form-data" in content_type:
+        is_form_request = (
+            "application/x-www-form-urlencoded" in content_type
+            or "multipart/form-data" in content_type
+        )
+        if is_form_request:
             form = await request.form()
             condition_id = form.get("condition_id") or condition_id
-            seed = int(form.get("seed", seed))
+            try:
+                seed = int(form.get("seed", seed))
+            except (TypeError, ValueError) as error:
+                raise HTTPException(
+                    status_code=422, detail="seed must be an integer"
+                ) from error
             task_id = form.get("task_id") or task_id
 
     if condition_id is None:
         condition_id = request.query_params.get("condition_id")
     if condition_id is None:
-        raise ValueError("condition_id is required")
+        raise HTTPException(status_code=422, detail="condition_id is required")
 
     conditions, tasks_cfg = _load_conditions_and_tasks()
     condition_key = next(
@@ -338,11 +373,13 @@ async def run_experiment(
         None,
     )
     if condition_key is None:
-        raise ValueError(f"Unknown condition_id: {condition_id}")
+        raise HTTPException(
+            status_code=422, detail=f"Unknown condition_id: {condition_id}"
+        )
 
     task = next((item for item in tasks_cfg["tasks"] if item["id"] == task_id), None)
     if task is None:
-        raise ValueError(f"Unknown task_id: {task_id}")
+        raise HTTPException(status_code=422, detail=f"Unknown task_id: {task_id}")
 
     run_metrics = run_single_experiment(condition_id, seed, task_id=task_id)
     file_path = LOG_DIR / f"condition_{condition_id}_seed_{seed:03d}_{task_id}.csv"
@@ -373,7 +410,14 @@ async def get_results():
         run_metrics[run_id] = metrics
 
     summary = aggregate_by_condition(run_metrics)
-    chart_rows = [{"condition": cond, "success": values.get("success", 0.0), "mean_risk": values.get("mean_risk", 0.0)} for cond, values in summary.items()]
+    chart_rows = [
+        {
+            "condition": condition,
+            "success": values.get("success", 0.0),
+            "mean_risk": values.get("mean_risk", 0.0),
+        }
+        for condition, values in summary.items()
+    ]
     return {"summary": summary, "chart_rows": chart_rows, "files": [p.name for p in sorted(LOG_DIR.glob("*.csv"))]}
 
 

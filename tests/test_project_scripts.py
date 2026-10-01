@@ -19,6 +19,21 @@ def test_metrics_script_runs_from_repo_root():
     assert result.returncode == 0, result.stderr or result.stdout
 
 
+def test_build_test_command_runs_outside_repo_root():
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "Build.py"),
+            "test",
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT / "tests",
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
 def test_single_experiment_runs_and_writes_step_data(tmp_path, monkeypatch):
     monkeypatch.setattr(run_experiments, "LOG_DIR", str(tmp_path))
 

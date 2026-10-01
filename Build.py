@@ -3,22 +3,31 @@ import os
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent
 
 def clean():
     """Clean build artifacts."""
     print("Cleaning build directories...")
-    dirs_to_clean = ['build', 'dist']
+    dirs_to_clean = [ROOT / 'build', ROOT / 'dist']
     for d in dirs_to_clean:
-        if os.path.exists(d):
+        if d.exists():
             shutil.rmtree(d)
             print(f"Removed {d}/")
 
 def install_deps():
     """Install required dependencies."""
     print("Installing requirements...")
-    if os.path.exists("requirements.txt"):
+    requirements = ROOT / "requirements.txt"
+    if requirements.exists():
         try:
-            subprocess.run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"], check=True)
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-r", str(requirements)],
+                check=True,
+                cwd=ROOT,
+            )
         except subprocess.CalledProcessError as e:
             print(f"Error installing dependencies: {e}")
             sys.exit(1)
@@ -26,21 +35,17 @@ def install_deps():
         print("No requirements.txt found. Skipping.")
 
 def run_tests():
-    """Run unit tests."""
-    print("Running tests...")
-    # Example using unittest. Replace with pytest if needed.
-    try:
-        subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests"], check=False)
-    except Exception as e:
-        print(f"Could not execute tests: {e}")
+    """Run the project's pytest suite and fail the build on test errors."""
+    print("Running pytest...")
+    subprocess.run([sys.executable, "-m", "pytest", "-q"], check=True, cwd=ROOT)
 
 def build():
     """Run the main build process (e.g., compiling, packaging)."""
     print("Starting build process...")
     # Add your project-specific build compilation or packaging tools here
     # Example: subprocess.run(["pyinstaller", "main.py"], check=True)
-    os.makedirs('dist', exist_ok=True)
-    print("Build complete. Artifacts placed in dist/")
+    (ROOT / 'dist').mkdir(exist_ok=True)
+    print(f"Build complete. Artifacts placed in {ROOT / 'dist'}/")
 
 def main():
     if len(sys.argv) > 1:

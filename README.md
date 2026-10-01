@@ -2,7 +2,7 @@
 
 A small research simulator for comparing rule-based agents under changing and unreliable conditions. Agents predict observations, track simulated resources, estimate risk, and change their behavior when risk increases.
 
-This repository contains a FastAPI service, two related agent simulations, a configurable GridWorld experiment runner, and scripts for summarizing experiment results.
+This repository contains a FastAPI service, agent and battery simulations, a configurable GridWorld experiment runner, a standalone ROS 2 simulator bridge, and scripts for summarizing experiment results. The API container does not install or start ROS 2.
 
 ## What It Does
 
@@ -28,6 +28,19 @@ python app.py
 ```
 
 The FastAPI route `POST /agent/simulate` runs this simulation and returns a JSON summary and per-step trace.
+
+### ROS 2 simulator bridge
+
+`src/ros2_simulator_swarm_bridge.py` is a separate ROS 2 node for a two-drone simulator. It subscribes to `/simulator/current_telemetry` (`geometry_msgs/Twist`), publishes simulated velocity commands on `/sim/drone_alpha/cmd_vel` and `/sim/drone_beta/cmd_vel`, and publishes swarm status and diagnostics on `/swarm/network_comms_bus` and `/swarm/chatbot_diagnostics`. Its sensor input is currently hard-coded mock data and its battery state starts randomly; it is not deterministic experiment infrastructure or a physical-drone controller.
+
+Run it only in an environment with ROS 2 and the `rclpy`, `geometry_msgs`, and `std_msgs` packages installed and sourced:
+
+```bash
+source /opt/ros/$ROS_DISTRO/setup.bash
+python -m src.ros2_simulator_swarm_bridge
+```
+
+Connect it only to a simulator configured for these topics. ROS 2 dependencies are intentionally separate from `requirements.txt` and the API container.
 
 ### Self-healing battery pack
 
@@ -107,12 +120,16 @@ cables, failed handshakes, faults, and unsafe measurements remain blocked.
 
 ## Install And Run
 
-`requirements.txt` notes Python 3.10 or later, but this minimum is not enforced by package metadata. The workspace has been tested with Python 3.14.2. Create an environment and install the dependencies:
+Python 3.10 or later is expected; the repository does not currently enforce a Python version through package metadata. Create an environment and install the dependencies:
 
 ```bash
 python -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
 ```
+
+Run the commands below from the repository root. The `Build.py` helper also
+resolves project paths from its own location, so its commands remain usable
+when invoked with an absolute path from another directory.
 
 Start the API from the repository root:
 
@@ -121,6 +138,7 @@ Start the API from the repository root:
 ```
 
 Open `http://127.0.0.1:8000/docs` for interactive API documentation.
+Direct Uvicorn startup is for local development. It allows unauthenticated requests unless `API_AUTH_TOKEN` is set; use the Compose deployment below for production, where authentication is required and HTTPS is provided by Caddy.
 
 Run all configured GridWorld experiments (4 conditions, 5 seeds, 3 tasks):
 
@@ -135,11 +153,38 @@ Summarize the CSV logs and regenerate the figures and table:
 .venv/bin/python scripts/regenerate_figures.py
 ```
 
-Run the tests:
+Run the pytest suite:
 
 ```bash
 .venv/bin/python -m pytest -q
 ```
+
+The equivalent project helper is `.venv/bin/python Build.py test`.
+
+### Container deployment
+
+The API and HTTPS proxy can be started with Docker Compose. First copy `.env.example` to `.env`, set `API_DOMAIN` to a public DNS name pointing at this host, and replace `API_AUTH_TOKEN` with a random secret (for example, generate one with `openssl rand -hex 32`). Open ports 80 and 443 on the host for Caddy's certificate challenge and HTTPS traffic.
+
+```bash
+cp .env.example .env
+# Edit .env before continuing.
+docker compose up --build -d
+docker compose logs -f api caddy
+```
+
+The API requires the configured bearer token on all routes except `/health`; the API container is not published directly to the host. Caddy obtains and renews TLS certificates. Experiment logs and TLS state are kept in named volumes. Stop the stack with `docker compose down`. The API container runs as a non-root user, has a health check, and does not mount host sensors, devices, or shared IPC. Keep `.env` private and rotate the API token when access must be revoked. This is single-token authentication, not per-user identity or role-based access control.
+
+### Mobile app
+
+The Expo SDK 57 client in `mobile/` targets iOS and Android. It can connect to the HTTPS API, store the bearer token in platform secure storage, and run the existing agent and battery simulations. The DJI Mavic 4 status remains disconnected; the app does not issue aircraft commands.
+
+```bash
+cd mobile
+npm install
+npm start
+```
+
+Store builds use Expo Application Services (EAS): configure the Apple and Google developer accounts and confirm the bundle/package identifier in `mobile/app.json`, then run `npx eas-cli@latest build --platform all --profile production`. EAS requires account credentials and signing configuration; this Linux workspace cannot produce a signed App Store submission by itself. The API endpoint entered in the app must be the HTTPS domain configured above.
 
 See [report/USAGE.md](report/USAGE.md) for additional usage details.
 
@@ -157,16 +202,20 @@ See [report/USAGE.md](report/USAGE.md) for additional usage details.
 - `GET /results` summarizes CSV files in `logs/raw/`.
 - `GET /dashboard` serves a small HTML dashboard.
 
-## Versions And Requirements
+## Runtime And Support
 
 - FastAPI application metadata version: **0.1.0**.
-- Android Buildozer configuration version: **0.1**; it targets Android API 33 with minimum API 21. Android packaging is a separate configuration and is not covered by the Python test suite.
-- Python: `requirements.txt` notes **3.10 or later**; this is not enforced by package metadata. The current workspace runtime is **3.14.2**.
-- Main dependencies: FastAPI, Uvicorn, NumPy, SciPy, PyYAML, jsonschema, pandas, matplotlib, and pytest. Minimum versions are listed in [requirements.txt](requirements.txt); versions are not pinned in a lockfile.
+- The legacy Buildozer configuration is Android-only and unverified. The cross-platform iOS/Android client is the Expo project in `mobile/`.
+- Python 3.10 or later is expected; package metadata does not enforce the minimum.
+- Python runtime and test dependencies are listed in [requirements.txt](requirements.txt) using minimum-version constraints without a lockfile. The mobile app pins its JavaScript dependency tree in `mobile/package-lock.json`.
+- Android packaging in `buildozer.spec` is a separate, unverified target. ROS 2 packages must be installed using the target ROS distribution.
 
-## Scope And Limitations
+## Production And Safety Limits
 
-- This is a rule-based research prototype, not a trained language model or a production robot controller.
-- GridWorld movement and hardware telemetry are simulated; no physical sensors or hardware are accessed.
+- This is a rule-based research prototype, not a trained language model or a production robot or battery controller.
+- GridWorld movement and battery telemetry are simulated. The API container does not access physical sensors or hardware. The ROS 2 node publishes simulator command topics and must not be connected to physical actuators.
 - The GridWorld runner uses a simple pathfinding policy. The experiments compare the configured risk and resource-monitoring behavior, not learned navigation.
 - The scalar simulation in `app.py`, the audited `/simulate` demo, and the GridWorld runner are separate simulation paths; only the API exposes them together as routes.
+- Battery chemistry results are screening estimates, and battery actuation is dry-run only. The optional Android sysfs transport is read-only by default; enabling writes is not a substitute for device-vendor validation or independent hardware interlocks.
+- The Compose deployment enforces bearer-token authentication and Caddy TLS. Tokens are shared by all app installs; deployments needing individual accounts, roles, or revocation should use an identity provider. Add rate controls, monitoring, log retention/backup, and a reviewed dependency lock before public production use.
+- No hardware-in-the-loop qualification, safety certification, availability target, or production security audit is provided. Keep deterministic hardware protections independent of these simulations and controllers.
