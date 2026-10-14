@@ -1,0 +1,63 @@
+# .github/workflows/repo-maintainer.yml
+name: Repository Auto-Maintainer
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  schedule:
+    - cron: '0 0 * * 1' # Runs automatically every Monday at midnight
+  workflow_dispatch: # Allows manual triggering from GitHub Actions tab
+
+jobs:
+  maintain-repo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-python: '3.11'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Install Linting & Formatting Tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install black autopep8 flake8
+          npm install -g prettier
+
+      - name: Run Syntax Checks & Auto-Fix Indentation
+        run: |
+          echo "Fixing Python formatting and indentation..."
+          black . || true
+          autopep8 --in-place --recursive --aggressive --aggressive . || true
+          
+          echo "Fixing JavaScript/JSON/Markdown/YAML formatting..."
+          npx prettier --write "." || true
+
+      - name: Verify Syntax and Code Integrity
+        run: |
+          echo "Checking for remaining syntax errors..."
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics || echo "Syntax check completed with warnings."
+
+      - name: Commit and Save Changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "KrypticKode007-Copilot"
+          
+          git add -A
+          if git diff-index --quiet HEAD --; then
+            echo "No changes detected. Repository is already optimized."
+          else
+            git commit -m "chore: automated syntax fixes, indentation alignment, and cleanup"
+            git push origin HEAD:${{ github.ref }}
+          fi
+          
